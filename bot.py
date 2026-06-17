@@ -52,7 +52,7 @@ def get_top_50_coins():
         sorted_pairs = sorted(usdt_pairs, key=lambda s: tickers[s]['quoteVolume'] if tickers[s]['quoteVolume'] else 0, reverse=True)
         return sorted_pairs[:50]
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error fetching coins: {e}")
         return []
 
 def check_signal(symbol):
@@ -73,6 +73,7 @@ def check_signal(symbol):
         vol_ratio = vol / avg_vol if avg_vol > 0 else 1
         mult = 1.5 if vol_ratio > 2.0 else 1.0
         
+        # BUY
         if (close > df['EMA21'].iloc[-1]) and (rsi < 35) and (rsi > prev_rsi) and (close <= df['BB_lower'].iloc[-1] * 1.001) and (df['MACD'].iloc[-1] > df['Signal'].iloc[-1]) and (vol > avg_vol):
             entry = close
             sl = round(entry - (atr * 0.3 * mult), 4)
@@ -82,6 +83,7 @@ def check_signal(symbol):
             expiry = (datetime.now() + timedelta(minutes=5)).strftime("%H:%M:%S")
             return (f"🟢 BUY: {symbol}\nEntry: ${entry:.4f}\nTP1: ${tp1:.4f} | TP2: ${tp2:.4f}\nSL: ${sl:.4f}\n⏰ {gen_time}\n⏳ Valid till: {expiry}")
         
+        # SELL
         elif (close < df['EMA21'].iloc[-1]) and (rsi > 65) and (rsi < prev_rsi) and (close >= df['BB_upper'].iloc[-1] * 0.999) and (df['MACD'].iloc[-1] < df['Signal'].iloc[-1]) and (vol > avg_vol):
             entry = close
             sl = round(entry + (atr * 0.3 * mult), 4)
@@ -92,32 +94,51 @@ def check_signal(symbol):
             return (f"🔴 SELL: {symbol}\nEntry: ${entry:.4f}\nTP1: ${tp1:.4f} | TP2: ${tp2:.4f}\nSL: ${sl:.4f}\n⏰ {gen_time}\n⏳ Valid till: {expiry}")
         return None
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error checking {symbol}: {e}")
         return None
 
+# ------------------ MAIN BOT LOOP (Heartbeat Added!) ------------------
 def run_bot():
     print("🚀 Bot Started with Binance API! (Dynamic TP/SL)")
+    last_heartbeat = time.time()  # Initialize heartbeat timer
+    
     while True:
         try:
             coins = get_top_50_coins()
             if not coins:
                 time.sleep(60)
                 continue
+            
             for symbol in coins:
                 signal = check_signal(symbol)
                 if signal:
                     telegram_bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=signal)
                     print(f"Signal sent for {symbol}")
                     time.sleep(2)
+            
+            # ---------- HEARTBEAT LOGIC (Check every 60 minutes) ----------
+            current_time = time.time()
+            if current_time - last_heartbeat >= 3600:  # 3600 seconds = 1 hour
+                hb_msg = "💓 Heartbeat: Bot is alive and scanning Top 50 coins. No signals triggered yet, waiting for market conditions."
+                try:
+                    telegram_bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=hb_msg)
+                    print(f"Heartbeat sent at {datetime.now()}")
+                except Exception as e:
+                    print(f"Heartbeat failed: {e}")
+                last_heartbeat = current_time  # Reset timer
+            
             time.sleep(60)
+            
         except Exception as e:
-            print(f"Loop error: {e}")
+            print(f"Main loop error: {e}")
             time.sleep(60)
 
+# ------------------ FLASK SERVER (FOR RENDER) ------------------
 app = Flask(__name__)
+
 @app.route('/')
 def home():
-    return "✅ Bot running with Binance API!"
+    return "✅ Bot running with Binance API + Heartbeat!"
 
 if __name__ == '__main__':
     thread = threading.Thread(target=run_bot)
