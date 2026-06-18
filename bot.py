@@ -5,17 +5,29 @@ from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
 import ccxt
-from telegram import Bot
+import requests
 from flask import Flask
 
-# ------------------ CONFIG (Render se aayenge) ------------------
+# ------------------ CONFIG ------------------
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
 BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
 
-# ------------------ INITIALIZE ------------------
-telegram_bot = Bot(token=TELEGRAM_BOT_TOKEN)
+# ------------------ TELEGRAM SEND (Synchronous) ------------------
+def send_telegram_message(text):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    params = {"chat_id": TELEGRAM_CHAT_ID, "text": text}
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code == 200:
+            print(f"✅ Telegram sent: {text[:30]}...")
+        else:
+            print(f"❌ Telegram error: {r.status_code} - {r.text}")
+    except Exception as e:
+        print(f"❌ Telegram send failed: {e}")
+
+# ------------------ EXCHANGE ------------------
 exchange = ccxt.binance({
     'apiKey': BINANCE_API_KEY,
     'secret': BINANCE_API_SECRET,
@@ -23,6 +35,7 @@ exchange = ccxt.binance({
     'enableRateLimit': True,
 })
 
+# ------------------ INDICATORS (Pehle jaisi) ------------------
 def calculate_indicators(df):
     df['EMA9'] = df['close'].ewm(span=9, adjust=False).mean()
     df['EMA21'] = df['close'].ewm(span=21, adjust=False).mean()
@@ -97,10 +110,11 @@ def check_signal(symbol):
         print(f"Error checking {symbol}: {e}")
         return None
 
-# ------------------ MAIN BOT LOOP (Heartbeat Added!) ------------------
+# ------------------ MAIN LOOP (Heartbeat) ------------------
 def run_bot():
     print("🚀 Bot Started with Binance API! (Dynamic TP/SL)")
-    last_heartbeat = time.time()  # Initialize heartbeat timer
+    send_telegram_message("🤖 Bot Started! Scanning Top 50 coins for signals. Heartbeat every 60 min.")
+    last_heartbeat = time.time()
     
     while True:
         try:
@@ -112,20 +126,14 @@ def run_bot():
             for symbol in coins:
                 signal = check_signal(symbol)
                 if signal:
-                    telegram_bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=signal)
+                    send_telegram_message(signal)
                     print(f"Signal sent for {symbol}")
                     time.sleep(2)
             
-            # ---------- HEARTBEAT LOGIC (Check every 60 minutes) ----------
-            current_time = time.time()
-            if current_time - last_heartbeat >= 3600:  # 3600 seconds = 1 hour
-                hb_msg = "💓 Heartbeat: Bot is alive and scanning Top 50 coins. No signals triggered yet, waiting for market conditions."
-                try:
-                    telegram_bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=hb_msg)
-                    print(f"Heartbeat sent at {datetime.now()}")
-                except Exception as e:
-                    print(f"Heartbeat failed: {e}")
-                last_heartbeat = current_time  # Reset timer
+            if time.time() - last_heartbeat >= 3600:
+                hb_msg = "💓 Heartbeat: Bot alive and scanning. No signals triggered yet."
+                send_telegram_message(hb_msg)
+                last_heartbeat = time.time()
             
             time.sleep(60)
             
@@ -133,12 +141,12 @@ def run_bot():
             print(f"Main loop error: {e}")
             time.sleep(60)
 
-# ------------------ FLASK SERVER (FOR RENDER) ------------------
+# ------------------ FLASK ------------------
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ Bot running with Binance API + Heartbeat!"
+    return "✅ Bot running with Binance API + Heartbeat (sync)!"
 
 if __name__ == '__main__':
     thread = threading.Thread(target=run_bot)
