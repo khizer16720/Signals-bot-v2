@@ -1,5 +1,4 @@
 import os
-import time
 import requests
 import pandas as pd
 import pandas_ta as ta
@@ -7,15 +6,13 @@ import threading
 from flask import Flask
 
 app = Flask(__name__)
+REPORT = "<h3>⏳ Backtest process mein hai... 10 seconds baad page refresh karein.</h3>"
 
-BACKTEST_REPORT = "<h3>⏳ Backtest process mein hai...</h3>"
-
-def fetch_historical_data(symbol="ETHUSDT", interval="5m", total_candles=5000):
-    url = "https://api.binance.com/api/v3/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": total_candles}
+def fetch_data(symbol="ETHUSDT", interval="5m", candles=5000):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={candles}"
     try:
-        res = requests.get(url, params=params, timeout=15).json()
-        df = pd.DataFrame(res, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base', 'taker_quote', 'ignore'])
+        res = requests.get(url, timeout=15).json()
+        df = pd.DataFrame(res, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'ct', 'qav', 'nt', 'tb', 'tq', 'ignore'])
         for col in ['open', 'high', 'low', 'close']:
             df[col] = df[col].astype(float)
         return df
@@ -23,48 +20,66 @@ def fetch_historical_data(symbol="ETHUSDT", interval="5m", total_candles=5000):
         return None
 
 def run_backtest(df):
-    # EMA 9 aur 21 ka crossover check karenge
-    df['EMA9'] = ta.ema(df['close'], length=9)
-    df['EMA21'] = ta.ema(df['close'], length=21)
+    # Indicators setup
+    df['EMA_9'] = ta.ema(df['close'], length=9)
+    df['EMA_21'] = ta.ema(df['close'], length=21)
     df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
     
     trades = []
+    
+    # Backtest Loop
     for i in range(22, len(df) - 1):
-        # Bahot Simple Rule: EMA9 jab EMA21 ko cross kare
-        if df['EMA9'][i] > df['EMA21'][i] and df['EMA9'][i-1] <= df['EMA21'][i-1]:
+        if df['EMA_9'][i] > df['EMA_21'][i] and df['EMA_9'][i-1] <= df['EMA_21'][i-1]:
             signal = "LONG"
-        elif df['EMA9'][i] < df['EMA21'][i] and df['EMA9'][i-1] >= df['EMA21'][i-1]:
+        elif df['EMA_9'][i] < df['EMA_21'][i] and df['EMA_9'][i-1] >= df['EMA_21'][i-1]:
             signal = "SHORT"
         else:
             continue
             
-        entry = df['close'][i]
-        sl = entry - (df['ATR'][i] * 1.5) if signal == "LONG" else entry + (df['ATR'][i] * 1.5)
-        tp = entry + (df['ATR'][i] * 3.0) if signal == "LONG" else entry - (df['ATR'][i] * 3.0)
+        entry_price = df['close'][i]
+        current_atr = df['ATR'][i]
         
-        # Agli 10 candles mein check karo SL ya TP
-        for j in range(i+1, min(i+11, len(df))):
+        # Wider targets taake choti movement se trade na katay
+        sl_distance = current_atr * 2.0
+        tp_distance = current_atr * 4.0
+        
+        sl = entry_price - sl_distance if signal == "LONG" else entry_price + sl_distance
+        tp = entry_price + tp_distance if signal == "LONG" else entry_price - tp_distance
+        
+        for j in range(i+1, min(i+21, len(df))):
             if (signal == "LONG" and df['low'][j] <= sl) or (signal == "SHORT" and df['high'][j] >= sl):
                 trades.append("SL")
                 break
             if (signal == "LONG" and df['high'][j] >= tp) or (signal == "SHORT" and df['low'][j] <= tp):
                 trades.append("TP")
                 break
+                
     return trades
 
 def generate_report():
-    global BACKTEST_REPORT
-    df = fetch_historical_data()
+    global REPORT
+    df = fetch_data()
     if df is not None:
         results = run_backtest(df)
         tp = results.count("TP")
         sl = results.count("SL")
-        win_rate = (tp / len(results) * 100) if len(results) > 0 else 0
-        BACKTEST_REPORT = f"<h1>📊 Simple EMA Crossover Results</h1><p><b>Win Rate: {win_rate:.2f}%</b></p><p>Total Trades: {len(results)}</p><p>✅ TP: {tp} | ❌ SL: {sl}</p>"
+        total = len(results)
+        win_rate = (tp / total * 100) if total > 0 else 0
+        
+        REPORT = f"""
+        <h1>📊 Backtest Results (Wider Targets)</h1>
+        <p><b>Win Rate:</b> {win_rate:.2f}%</p>
+        <p><b>Total Trades:</b> {total}</p>
+        <p>✅ <b>Take Profit (TP):</b> {tp}</p>
+        <p>❌ <b>Stop Loss (SL):</b> {sl}</p>
+        <p><i>Note: Ismein Risk-Reward 1:2 hai, toh kam win rate bhi profit dega.</i></p>
+        """
+    else:
+        REPORT = "<h3>Error: API data fetch failed.</h3>"
 
 @app.route('/')
 def home():
-    return BACKTEST_REPORT
+    return REPORT
 
 if __name__ == "__main__":
     threading.Thread(target=generate_report, daemon=True).start()
