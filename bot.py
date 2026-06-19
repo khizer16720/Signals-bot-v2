@@ -6,9 +6,8 @@ import threading
 from flask import Flask
 
 app = Flask(__name__)
-REPORT = "<h3>⏳ 10 Coins ka Backtest chal raha hai... 30-40 seconds wait karein.</h3>"
+REPORT = "<h3>⏳ Filtered Backtest chal raha hai... 30-40 seconds wait karein.</h3>"
 
-# Top 10 Coins ki list
 COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "DOGEUSDT", "LINKUSDT"]
 
 def fetch_data(symbol, candles=10000):
@@ -21,20 +20,32 @@ def fetch_data(symbol, candles=10000):
     except: return None
 
 def run_backtest_for_coin(df):
+    # Indicators
     df['EMA_9'] = ta.ema(df['close'], length=9)
     df['EMA_21'] = ta.ema(df['close'], length=21)
+    df['EMA_200'] = ta.ema(df['close'], length=200) # Trend Filter
     df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
     
     trade_amount = 1000
     pnl = 0
-    for i in range(22, len(df) - 1):
-        if df['EMA_9'][i] > df['EMA_21'][i] and df['EMA_9'][i-1] <= df['EMA_21'][i-1]: signal = "LONG"
-        elif df['EMA_9'][i] < df['EMA_21'][i] and df['EMA_9'][i-1] >= df['EMA_21'][i-1]: signal = "SHORT"
-        else: continue
+    
+    for i in range(201, len(df) - 1):
+        signal = None
+        
+        # TREND FILTER: Agar price EMA 200 ke upar hai toh sirf LONG, niche hai toh sirf SHORT
+        if df['close'][i] > df['EMA_200'][i]:
+            if df['EMA_9'][i] > df['EMA_21'][i] and df['EMA_9'][i-1] <= df['EMA_21'][i-1]:
+                signal = "LONG"
+        elif df['close'][i] < df['EMA_200'][i]:
+            if df['EMA_9'][i] < df['EMA_21'][i] and df['EMA_9'][i-1] >= df['EMA_21'][i-1]:
+                signal = "SHORT"
+        
+        if not signal: continue
             
         sl_risk = trade_amount * 0.02
         tp_gain = trade_amount * 0.04
         entry = df['close'][i]
+        
         sl = entry - (df['ATR'][i] * 2.0) if signal == "LONG" else entry + (df['ATR'][i] * 2.0)
         tp = entry + (df['ATR'][i] * 4.0) if signal == "LONG" else entry - (df['ATR'][i] * 4.0)
         
@@ -57,7 +68,7 @@ def generate_report():
             results.append(f"<tr><td>{coin}</td><td>${pnl:.2f}</td></tr>")
     
     REPORT = f"""
-    <h1>📊 Top 10 Coins Strategy Report</h1>
+    <h1>📊 Filtered Strategy Report (EMA 200 Trend Filter)</h1>
     <table border="1">
         <tr><th>Coin</th><th>Profit/Loss ($1000 trade)</th></tr>
         {"".join(results)}
