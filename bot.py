@@ -54,6 +54,10 @@ def apply_indicators(df):
 def run_backtest(df):
     trades = []
     
+    print("--- AVAILABLE COLUMNS IN DATAFRAME ---")
+    print(list(df.columns))
+    print("--------------------------------------")
+    
     ema21 = df['EMA_21']
     rsi = df['RSI_14']
     macd = df['MACD_12_26_9']
@@ -61,14 +65,18 @@ def run_backtest(df):
     vol = df['volume']
     vol_sma = df['SMA_20_Volume']
     
-    # Bollinger Bands Column Name Flexibility Fix
-    bbl_name = 'BBL_20_2.0' if 'BBL_20_2.0' in df.columns else 'BBL_20_2'
-    bbu_name = 'BBU_20_2.0' if 'BBU_20_2.0' in df.columns else 'BBU_20_2'
+    # Automatic Column Name Finder (Bollinger Bands & ATR ke liye)
+    bbl_name = next((col for col in df.columns if col.startswith('BBL_')), None)
+    bbu_name = next((col for col in df.columns if col.startswith('BBU_')), None)
+    atr_name = next((col for col in df.columns if col.startswith('ATR')), None)
     
+    if not bbl_name or not bbu_name:
+        raise KeyError(f"Bollinger Bands columns nahi miley! Columns: {list(df.columns)}")
+    if not atr_name:
+        raise KeyError("ATR column nahi mila!")
+        
     bb_lower = df[bbl_name]
     bb_upper = df[bbu_name]
-    
-    atr_name = 'ATRr_14' if 'ATRr_14' in df.columns else 'ATR_14'
     atr_col = df[atr_name]
     
     for i in range(21, len(df) - 1):
@@ -151,15 +159,15 @@ def generate_report_thread():
             <hr style="border-color: #333; margin: 20px 0;">
             
             <div style="background-color: #1e1e1e; padding: 20px; border-radius: 8px; max-width: 500px;">
-                <p style="font-size: 18px; margin-top: 0;"><b>Total Signals Generated:</b> <span style="color: #ffb300;">{total_trades}</span></p>
-                <p style="color: #ff4d4d; font-size: 16px; margin: 8px 0;">❌ Stop Loss Hit: <b>{sl_hits}</b></p>
-                <p style="color: #4da6ff; font-size: 16px; margin: 8px 0;">🎯 Target 1 Hit: <b>{tp1_hits}</b></p>
-                <p style="color: #00e676; font-size: 16px; margin: 8px 0;">🔥 Target 2 Hit: <b>{tp2_hits}</b></p>
-                <p style="color: #b3b3b3; font-size: 16px; margin: 8px 0;">⏰ Expired (5 Min Over): <b>{expired}</b></p>
+                <p style="font-size: 18px; margin-top: 0;"><b>Total Signals Generated:</b> <span style="color: #ffb300;">{{total_trades}}</span></p>
+                <p style="color: #ff4d4d; font-size: 16px; margin: 8px 0;">❌ Stop Loss Hit: <b>{{sl_hits}}</b></p>
+                <p style="color: #4da6ff; font-size: 16px; margin: 8px 0;">🎯 Target 1 Hit: <b>{{tp1_hits}}</b></p>
+                <p style="color: #00e676; font-size: 16px; margin: 8px 0;">🔥 Target 2 Hit: <b>{{tp2_hits}}</b></p>
+                <p style="color: #b3b3b3; font-size: 16px; margin: 8px 0;">⏰ Expired (5 Min Over): <b>{{expired}}</b></p>
             </div>
             
             <hr style="border-color: #333; margin-top: 20px;">
-            <h2 style="color: #00e676; margin-top: 15px;">📈 Overall Win Rate (TP1 or TP2): {win_rate:.2f}%</h2>
+            <h2 style="color: #00e676; margin-top: 15px;">📈 Overall Win Rate (TP1 or TP2): {{win_rate:.2f}}%</h2>
             <p style="color: #888; font-size: 12px; margin-top: 25px;">Note: Yeh data cloud memory se instantly load hua hai.</p>
         </body>
         </html>
@@ -179,4 +187,4 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-    
+        
