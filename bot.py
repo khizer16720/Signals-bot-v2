@@ -8,30 +8,21 @@ from flask import Flask
 
 app = Flask(__name__)
 
-# Global variable report store karne ke liye
-BACKTEST_REPORT = "<h3>⏳ Backtest background mein chal raha hai... Please 15-20 seconds baad page refresh (reload) karein.</h3>"
+BACKTEST_REPORT = "<h3>⏳ Backtest process mein hai... 15 seconds wait karke page refresh karein.</h3>"
 
-def fetch_historical_data(symbol="ETHUSDT", interval="5m", total_candles=17500):
+def fetch_historical_data(symbol="ETHUSDT", interval="5m", total_candles=2000):
     url = "https://api.binance.com/api/v3/klines"
     all_candles = []
     end_time = None
     
-    while len(all_candles) < total_candles:
-        limit = min(1000, total_candles - len(all_candles))
-        params = {"symbol": symbol, "interval": interval, "limit": limit}
-        if end_time:
-            params["endTime"] = end_time
-            
-        try:
-            res = requests.get(url, params=params, timeout=15).json()
-            if not res or len(res) == 0:
-                break
-            all_candles = res + all_candles
-            end_time = res[0][0] - 1
-            time.sleep(0.1)
-        except Exception as e:
-            print(f"Data fetch error: {e}")
-            break
+    # Sirf 2000 candles fetch karna
+    params = {"symbol": symbol, "interval": interval, "limit": total_candles}
+    try:
+        res = requests.get(url, params=params, timeout=15).json()
+        all_candles = res
+    except Exception as e:
+        print(f"Fetch error: {e}")
+        return None
         
     df = pd.DataFrame(all_candles, columns=[
         'time', 'open', 'high', 'low', 'close', 'volume', 
@@ -42,7 +33,6 @@ def fetch_historical_data(symbol="ETHUSDT", interval="5m", total_candles=17500):
     return df
 
 def apply_indicators(df):
-    df.ta.ema(length=9, append=True)
     df.ta.ema(length=21, append=True)
     df.ta.rsi(length=14, append=True)
     df.ta.bbands(length=20, std=2, append=True)
@@ -53,138 +43,50 @@ def apply_indicators(df):
 
 def run_backtest(df):
     trades = []
-    
-    print("--- AVAILABLE COLUMNS IN DATAFRAME ---")
-    print(list(df.columns))
-    print("--------------------------------------")
-    
-    ema21 = df['EMA_21']
-    rsi = df['RSI_14']
-    macd = df['MACD_12_26_9']
-    macd_sig = df['MACDs_12_26_9']
-    vol = df['volume']
-    vol_sma = df['SMA_20_Volume']
-    
-    # Automatic Column Name Finder (Bollinger Bands & ATR ke liye)
-    bbl_name = next((col for col in df.columns if col.startswith('BBL_')), None)
-    bbu_name = next((col for col in df.columns if col.startswith('BBU_')), None)
-    atr_name = next((col for col in df.columns if col.startswith('ATR')), None)
-    
-    if not bbl_name or not bbu_name:
-        raise KeyError(f"Bollinger Bands columns nahi miley! Columns: {list(df.columns)}")
-    if not atr_name:
-        raise KeyError("ATR column nahi mila!")
-        
-    bb_lower = df[bbl_name]
-    bb_upper = df[bbu_name]
-    atr_col = df[atr_name]
+    # Dynamic column picking
+    bbl = [c for c in df.columns if c.startswith('BBL_')][0]
+    bbu = [c for c in df.columns if c.startswith('BBU_')][0]
+    atr = [c for c in df.columns if c.startswith('ATR_')][0]
     
     for i in range(21, len(df) - 1):
-        curr_close = df.iloc[i]['close']
-        
-        buy_cond = (
-            curr_close > ema21[i] and 
-            rsi[i] < 35 and (rsi[i] > rsi[i-1]) and 
-            curr_close <= (bb_lower[i] * 1.001) and 
-            macd[i] > macd_sig[i] and 
-            vol[i] > vol_sma[i]
-        )
-        
-        sell_cond = (
-            curr_close < ema21[i] and 
-            rsi[i] > 65 and (rsi[i] < rsi[i-1]) and 
-            curr_close >= (bb_upper[i] * 0.999) and 
-            macd[i] < macd_sig[i] and 
-            vol[i] > vol_sma[i]
-        )
-        
-        signal = "LONG" if buy_cond else "SHORT" if sell_cond else None
-        
-        if signal:
-            entry_price = df.iloc[i+1]['open']
-            atr = atr_col[i]
-            vol_ratio = vol[i] / vol_sma[i]
+        if df['close'][i] > df['EMA_21'][i] and df['RSI_14'][i] < 35 and df['close'][i] <= df[bbl][i]:
+            signal = "LONG"
+        elif df['close'][i] < df['EMA_21'][i] and df['RSI_14'][i] > 65 and df['close'][i] >= df[bbu][i]:
+            signal = "SHORT"
+        else:
+            continue
             
-            m_sl, m_tp1, m_tp2 = (0.45, 0.75, 1.5) if vol_ratio >= 2.0 else (0.3, 0.5, 1.0)
-            
-            if signal == "LONG":
-                sl, tp1, tp2 = entry_price - (atr * m_sl), entry_price + (atr * m_tp1), entry_price + (atr * m_tp2)
-            else:
-                sl, tp1, tp2 = entry_price + (atr * m_sl), entry_price - (atr * m_tp1), entry_price - (atr * m_tp2)
-                
-            trade_result = "EXPIRED"
-            for j in range(i+1, min(i+6, len(df))):
-                future_high = df.iloc[j]['high']
-                future_low = df.iloc[j]['low']
-                
-                if signal == "LONG":
-                    if future_low <= sl: trade_result = "HIT_SL"; break
-                    elif future_high >= tp2: trade_result = "HIT_TP2"; break
-                    elif future_high >= tp1: trade_result = "HIT_TP1"
-                else:
-                    if future_high >= sl: trade_result = "HIT_SL"; break
-                    elif future_low <= tp2: trade_result = "HIT_TP2"; break
-                    elif future_low <= tp1: trade_result = "HIT_TP1"
-
-            trades.append({"result": trade_result})
-            
+        entry = df['open'][i+1]
+        sl = entry - (df[atr][i] * 0.5) if signal == "LONG" else entry + (df[atr][i] * 0.5)
+        tp = entry + (df[atr][i] * 1.0) if signal == "LONG" else entry - (df[atr][i] * 1.0)
+        
+        for j in range(i+1, min(i+10, len(df))):
+            if (signal == "LONG" and df['low'][j] <= sl) or (signal == "SHORT" and df['high'][j] >= sl):
+                trades.append("SL")
+                break
+            if (signal == "LONG" and df['high'][j] >= tp) or (signal == "SHORT" and df['low'][j] <= tp):
+                trades.append("TP")
+                break
     return trades
 
-def generate_report_thread():
+def generate_report():
     global BACKTEST_REPORT
-    print("Background backtest started for 2 months...")
-    
-    try:
-        df = fetch_historical_data("ETHUSDT", "5m", 17500)
+    df = fetch_historical_data()
+    if df is not None:
         df = apply_indicators(df)
-        trades = run_backtest(df)
-        
-        total_trades = len(trades)
-        if total_trades == 0:
-            BACKTEST_REPORT = "<h3 style='color: white;'>Grand Report: Pichle 2 mahine mein koi signal nahi mila. Conditions bohot strict hain.</h3>"
-            return
-            
-        sl_hits = sum(1 for t in trades if t['result'] == 'HIT_SL')
-        tp1_hits = sum(1 for t in trades if t['result'] == 'HIT_TP1')
-        tp2_hits = sum(1 for t in trades if t['result'] == 'HIT_TP2')
-        expired = sum(1 for t in trades if t['result'] == 'EXPIRED')
-        win_rate = ((tp1_hits + tp2_hits) / total_trades) * 100
-
-        BACKTEST_REPORT = f"""
-        <html>
-        <head><title>Backtest Results</title></head>
-        <body style="font-family: Arial, sans-serif; background-color: #121212; color: #ffffff; padding: 30px; line-height: 1.6;">
-            <h2 style="color: #00e676; border-bottom: 2px solid #333; padding-bottom: 10px;">📊 Grand Strategy Backtest Report (ETH/USDT)</h2>
-            <p style="font-size: 16px;"><b>Period:</b> Pichle 2 Mahine (~60 Days) | <b>Timeframe:</b> 5 Minutes (5m)</p>
-            <hr style="border-color: #333; margin: 20px 0;">
-            
-            <div style="background-color: #1e1e1e; padding: 20px; border-radius: 8px; max-width: 500px;">
-                <p style="font-size: 18px; margin-top: 0;"><b>Total Signals Generated:</b> <span style="color: #ffb300;">{{total_trades}}</span></p>
-                <p style="color: #ff4d4d; font-size: 16px; margin: 8px 0;">❌ Stop Loss Hit: <b>{{sl_hits}}</b></p>
-                <p style="color: #4da6ff; font-size: 16px; margin: 8px 0;">🎯 Target 1 Hit: <b>{{tp1_hits}}</b></p>
-                <p style="color: #00e676; font-size: 16px; margin: 8px 0;">🔥 Target 2 Hit: <b>{{tp2_hits}}</b></p>
-                <p style="color: #b3b3b3; font-size: 16px; margin: 8px 0;">⏰ Expired (5 Min Over): <b>{{expired}}</b></p>
-            </div>
-            
-            <hr style="border-color: #333; margin-top: 20px;">
-            <h2 style="color: #00e676; margin-top: 15px;">📈 Overall Win Rate (TP1 or TP2): {{win_rate:.2f}}%</h2>
-            <p style="color: #888; font-size: 12px; margin-top: 25px;">Note: Yeh data cloud memory se instantly load hua hai.</p>
-        </body>
-        </html>
-        """
-        print("Background backtest completed successfully!")
-    except Exception as e:
-        BACKTEST_REPORT = f"<h3 style='color: red;'>Error during backtest calculation: {str(e)}</h3>"
+        results = run_backtest(df)
+        tp = results.count("TP")
+        sl = results.count("SL")
+        win_rate = (tp / (tp + sl) * 100) if (tp + sl) > 0 else 0
+        BACKTEST_REPORT = f"<h1>Result: {win_rate:.2f}% Win Rate</h1><p>TP: {tp}, SL: {sl}</p>"
+    else:
+        BACKTEST_REPORT = "<h3>Error fetching data from Binance.</h3>"
 
 @app.route('/')
 def home():
     return BACKTEST_REPORT
 
 if __name__ == "__main__":
-    backtest_thread = threading.Thread(target=generate_report_thread)
-    backtest_thread.daemon = True
-    backtest_thread.start()
+    threading.Thread(target=generate_report, daemon=True).start()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
     
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
-        
