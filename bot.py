@@ -10,7 +10,7 @@ app = Flask(__name__)
 
 BACKTEST_REPORT = "<h3>⏳ Backtest process mein hai... 15 seconds wait karke page refresh karein.</h3>"
 
-def fetch_historical_data(symbol="ETHUSDT", interval="5m", total_candles=2000):
+def fetch_historical_data(symbol="ETHUSDT", interval="5m", total_candles=5000):
     url = "https://api.binance.com/api/v3/klines"
     params = {"symbol": symbol, "interval": interval, "limit": total_candles}
     try:
@@ -30,29 +30,23 @@ def apply_indicators(df):
     df.ta.ema(length=21, append=True)
     df.ta.rsi(length=14, append=True)
     df.ta.bbands(length=20, std=2, append=True)
-    df.ta.macd(fast=12, slow=26, signal=9, append=True)
     df.ta.atr(length=14, append=True)
     return df
 
 def run_backtest(df):
     trades = []
-    # Dynamic column picking
     try:
-        # 'BBL' aur 'BBU' ke liye flexible search
         bbl = [c for c in df.columns if 'BBL' in c][0]
         bbu = [c for c in df.columns if 'BBU' in c][0]
-        # 'ATR' ke liye flexible search
         atr = [c for c in df.columns if 'ATR' in c][0]
-    except IndexError as e:
-        print(f"Column selection error. Available columns: {list(df.columns)}")
-        raise e
+    except IndexError:
+        raise Exception("Indicators calculate nahi ho sake!")
     
     for i in range(21, len(df) - 1):
-        # Buy Condition
-        if df['close'][i] > df['EMA_21'][i] and df['RSI_14'][i] < 35 and df['close'][i] <= df[bbl][i]:
+        # Loose Conditions (Zyada signals ke liye)
+        if df['close'][i] > df['EMA_21'][i] and df['RSI_14'][i] < 45 and df['close'][i] <= (df[bbl][i] * 1.02):
             signal = "LONG"
-        # Sell Condition
-        elif df['close'][i] < df['EMA_21'][i] and df['RSI_14'][i] > 65 and df['close'][i] >= df[bbu][i]:
+        elif df['close'][i] < df['EMA_21'][i] and df['RSI_14'][i] > 55 and df['close'][i] >= (df[bbu][i] * 0.98):
             signal = "SHORT"
         else:
             continue
@@ -80,11 +74,11 @@ def generate_report():
             tp = results.count("TP")
             sl = results.count("SL")
             win_rate = (tp / (tp + sl) * 100) if (tp + sl) > 0 else 0
-            BACKTEST_REPORT = f"<h1>Result: {win_rate:.2f}% Win Rate</h1><p>Total Trades: {len(results)}<br>TP: {tp}, SL: {sl}</p>"
+            BACKTEST_REPORT = f"<h1>📊 Strategy Performance</h1><p><b>Win Rate: {win_rate:.2f}%</b></p><p>Total Trades: {len(results)}</p><p>✅ TP: {tp} | ❌ SL: {sl}</p>"
         else:
-            BACKTEST_REPORT = "<h3>Error fetching data from Binance.</h3>"
+            BACKTEST_REPORT = "<h3>Error: Data nahi mil saka.</h3>"
     except Exception as e:
-        BACKTEST_REPORT = f"<h3>Calculation Error: {str(e)}</h3>"
+        BACKTEST_REPORT = f"<h3>Error: {str(e)}</h3>"
 
 @app.route('/')
 def home():
