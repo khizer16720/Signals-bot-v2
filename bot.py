@@ -6,54 +6,47 @@ import threading
 from flask import Flask
 
 app = Flask(__name__)
-REPORT = "<h3>⏳ Filtered Backtest chal raha hai... 30-40 seconds wait karein.</h3>"
+REPORT = "<h3>⏳ Scalping Backtest (High Precision) in progress...</h3>"
 
-COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "DOGEUSDT", "LINKUSDT"]
+COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
 
-def fetch_data(symbol, candles=10000):
+def fetch_data(symbol, candles=5000):
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=5m&limit={candles}"
     try:
-        res = requests.get(url, timeout=15).json()
+        res = requests.get(url, timeout=10).json()
         df = pd.DataFrame(res, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'ct', 'qav', 'nt', 'tb', 'tq', 'ignore'])
         for col in ['open', 'high', 'low', 'close']: df[col] = df[col].astype(float)
         return df
     except: return None
 
-def run_backtest_for_coin(df):
+def run_scalping_backtest(df):
     # Indicators
-    df['EMA_9'] = ta.ema(df['close'], length=9)
-    df['EMA_21'] = ta.ema(df['close'], length=21)
-    df['EMA_200'] = ta.ema(df['close'], length=200) # Trend Filter
-    df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
+    df['EMA_200'] = ta.ema(df['close'], length=200)
+    df['RSI'] = ta.rsi(df['close'], length=14)
+    bb = ta.bbands(df['close'], length=20, std=2)
+    df['BBL'] = bb['BBL_20_2.0']
+    df['BBU'] = bb['BBU_20_2.0']
     
-    trade_amount = 1000
     pnl = 0
+    trade_amt = 1000
     
-    for i in range(201, len(df) - 1):
-        signal = None
+    for i in range(200, len(df) - 5):
+        # Entry Condition: Strong Trend + Over-extended (Bollinger) + RSI Momentum
+        long_cond = (df['close'][i] > df['EMA_200'][i]) and (df['close'][i] <= df['BBL'][i]) and (df['RSI'][i] < 40)
+        short_cond = (df['close'][i] < df['EMA_200'][i]) and (df['close'][i] >= df['BBU'][i]) and (df['RSI'][i] > 60)
         
-        # TREND FILTER: Agar price EMA 200 ke upar hai toh sirf LONG, niche hai toh sirf SHORT
-        if df['close'][i] > df['EMA_200'][i]:
-            if df['EMA_9'][i] > df['EMA_21'][i] and df['EMA_9'][i-1] <= df['EMA_21'][i-1]:
-                signal = "LONG"
-        elif df['close'][i] < df['EMA_200'][i]:
-            if df['EMA_9'][i] < df['EMA_21'][i] and df['EMA_9'][i-1] >= df['EMA_21'][i-1]:
-                signal = "SHORT"
-        
-        if not signal: continue
+        if long_cond or short_cond:
+            entry = df['close'][i]
+            # Scalping target: 0.5% profit, 0.25% stop loss (2:1 RR)
+            tp = entry * 1.005 if long_cond else entry * 0.995
+            sl = entry * 0.9975 if long_cond else entry * 1.0025
             
-        sl_risk = trade_amount * 0.02
-        tp_gain = trade_amount * 0.04
-        entry = df['close'][i]
-        
-        sl = entry - (df['ATR'][i] * 2.0) if signal == "LONG" else entry + (df['ATR'][i] * 2.0)
-        tp = entry + (df['ATR'][i] * 4.0) if signal == "LONG" else entry - (df['ATR'][i] * 4.0)
-        
-        for j in range(i+1, min(i+21, len(df))):
-            if (signal == "LONG" and df['low'][j] <= sl) or (signal == "SHORT" and df['high'][j] >= sl):
-                pnl -= sl_risk; break
-            if (signal == "LONG" and df['high'][j] >= tp) or (signal == "SHORT" and df['low'][j] <= tp):
-                pnl += tp_gain; break
+            # Check next 5 candles for outcome
+            for j in range(i+1, i+6):
+                if (long_cond and df['high'][j] >= tp) or (short_cond and df['low'][j] <= tp):
+                    pnl += 5; break # $5 profit (0.5%)
+                if (long_cond and df['low'][j] <= sl) or (short_cond and df['high'][j] >= sl):
+                    pnl -= 2.5; break # $2.5 loss (0.25%)
     return pnl
 
 def generate_report():
@@ -63,14 +56,14 @@ def generate_report():
     for coin in COINS:
         df = fetch_data(coin)
         if df is not None:
-            pnl = run_backtest_for_coin(df)
+            pnl = run_scalping_backtest(df)
             total_net_pnl += pnl
             results.append(f"<tr><td>{coin}</td><td>${pnl:.2f}</td></tr>")
     
     REPORT = f"""
-    <h1>📊 Filtered Strategy Report (EMA 200 Trend Filter)</h1>
+    <h1>🚀 Scalping Strategy (High Precision)</h1>
     <table border="1">
-        <tr><th>Coin</th><th>Profit/Loss ($1000 trade)</th></tr>
+        <tr><th>Coin</th><th>P/L ($1000 trade)</th></tr>
         {"".join(results)}
     </table>
     <h2>Total Net Profit: ${total_net_pnl:.2f}</h2>
