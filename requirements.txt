@@ -1,5 +1,4 @@
+Flask
+requests
 pandas
-numpy
-ccxt
-python-telegram-bot
-flask
+pandas-ta
