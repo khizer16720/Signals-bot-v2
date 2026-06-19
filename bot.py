@@ -6,10 +6,13 @@ import threading
 from flask import Flask
 
 app = Flask(__name__)
-REPORT = "<h3>⏳ Backtest abhi chal raha hai... 10 second ruk kar refresh karein.</h3>"
+REPORT = "<h3>⏳ 10 Coins ka Backtest chal raha hai... 30-40 seconds wait karein.</h3>"
 
-def fetch_data(symbol="ETHUSDT", interval="5m", candles=5000):
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={interval}&limit={candles}"
+# Top 10 Coins ki list
+COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "AVAXUSDT", "DOTUSDT", "DOGEUSDT", "LINKUSDT"]
+
+def fetch_data(symbol, candles=10000):
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=5m&limit={candles}"
     try:
         res = requests.get(url, timeout=15).json()
         df = pd.DataFrame(res, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'ct', 'qav', 'nt', 'tb', 'tq', 'ignore'])
@@ -17,55 +20,50 @@ def fetch_data(symbol="ETHUSDT", interval="5m", candles=5000):
         return df
     except: return None
 
-def run_backtest(df):
+def run_backtest_for_coin(df):
     df['EMA_9'] = ta.ema(df['close'], length=9)
     df['EMA_21'] = ta.ema(df['close'], length=21)
     df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
     
-    trade_amount = 1000  # Har trade $1000 ki
-    net_pnl = 0
-    tp_hits = 0
-    sl_hits = 0
-    
+    trade_amount = 1000
+    pnl = 0
     for i in range(22, len(df) - 1):
-        if df['EMA_9'][i] > df['EMA_21'][i] and df['EMA_9'][i-1] <= df['EMA_21'][i-1]:
-            signal = "LONG"
-        elif df['EMA_9'][i] < df['EMA_21'][i] and df['EMA_9'][i-1] >= df['EMA_21'][i-1]:
-            signal = "SHORT"
+        if df['EMA_9'][i] > df['EMA_21'][i] and df['EMA_9'][i-1] <= df['EMA_21'][i-1]: signal = "LONG"
+        elif df['EMA_9'][i] < df['EMA_21'][i] and df['EMA_9'][i-1] >= df['EMA_21'][i-1]: signal = "SHORT"
         else: continue
             
-        sl_risk = trade_amount * 0.02  # $20 loss
-        tp_gain = trade_amount * 0.04  # $40 profit
-        
+        sl_risk = trade_amount * 0.02
+        tp_gain = trade_amount * 0.04
         entry = df['close'][i]
         sl = entry - (df['ATR'][i] * 2.0) if signal == "LONG" else entry + (df['ATR'][i] * 2.0)
         tp = entry + (df['ATR'][i] * 4.0) if signal == "LONG" else entry - (df['ATR'][i] * 4.0)
         
         for j in range(i+1, min(i+21, len(df))):
             if (signal == "LONG" and df['low'][j] <= sl) or (signal == "SHORT" and df['high'][j] >= sl):
-                net_pnl -= sl_risk
-                sl_hits += 1
-                break
+                pnl -= sl_risk; break
             if (signal == "LONG" and df['high'][j] >= tp) or (signal == "SHORT" and df['low'][j] <= tp):
-                net_pnl += tp_gain
-                tp_hits += 1
-                break
-    return tp_hits, sl_hits, net_pnl
+                pnl += tp_gain; break
+    return pnl
 
 def generate_report():
     global REPORT
-    df = fetch_data()
-    if df is not None:
-        tp, sl, pnl = run_backtest(df)
-        REPORT = f"""
-        <h1>📊 ETHUSDT Performance Report</h1>
-        <p><b>Investment Per Trade:</b> $1000</p>
-        <p>✅ Total TP Hits: {tp}</p>
-        <p>❌ Total SL Hits: {sl}</p>
-        <h2 style="color: {'green' if pnl >= 0 else 'red'};">
-            Net Profit/Loss: ${pnl:.2f}
-        </h2>
-        """
+    results = []
+    total_net_pnl = 0
+    for coin in COINS:
+        df = fetch_data(coin)
+        if df is not None:
+            pnl = run_backtest_for_coin(df)
+            total_net_pnl += pnl
+            results.append(f"<tr><td>{coin}</td><td>${pnl:.2f}</td></tr>")
+    
+    REPORT = f"""
+    <h1>📊 Top 10 Coins Strategy Report</h1>
+    <table border="1">
+        <tr><th>Coin</th><th>Profit/Loss ($1000 trade)</th></tr>
+        {"".join(results)}
+    </table>
+    <h2>Total Net Profit: ${total_net_pnl:.2f}</h2>
+    """
 
 @app.route('/')
 def home():
