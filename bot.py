@@ -1,39 +1,51 @@
+import os
+import requests
 import pandas as pd
 import pandas_ta as ta
+import threading
+from flask import Flask
 from sklearn.ensemble import RandomForestClassifier
-import requests
+
+app = Flask(__name__)
+REPORT = "<h3>⏳ ML Bot Training on data...</h3>"
+COINS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
 
 def get_ml_data(symbol):
-    # Data fetch karna
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=5m&limit=5000"
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=5m&limit=2000"
     res = requests.get(url).json()
     df = pd.DataFrame(res, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'ct', 'qav', 'nt', 'tb', 'tq', 'ignore'])
     for col in ['open', 'high', 'low', 'close']: df[col] = df[col].astype(float)
-    
-    # Features banana
     df['RSI'] = ta.rsi(df['close'], length=14)
     df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
     df['Return'] = df['close'].pct_change()
     df.dropna(inplace=True)
-    
-    # Target: Agar agli 5 candles mein price 0.5% upar jaye toh 1, warna 0
-    df['Target'] = (df['close'].shift(-5) > df['close'] * 1.005).astype(int)
+    # Target: Agli 5 candles mein 0.3% growth
+    df['Target'] = (df['close'].shift(-5) > df['close'] * 1.003).astype(int)
     return df
 
-def train_and_predict(df):
+def train_and_signal(df):
     features = ['RSI', 'ATR', 'Return']
-    X = df[features]
-    y = df['Target']
-    
-    # Model Train karna
-    model = RandomForestClassifier(n_estimators=100)
-    model.fit(X[:-5], y[:-5]) # Future data chhupa kar train kiya
-    
-    # Prediction
-    prediction = model.predict(X.tail(1))
-    return prediction[0]
+    X = df[features].iloc[:-5]
+    y = df['Target'].iloc[:-5]
+    model = RandomForestClassifier(n_estimators=50)
+    model.fit(X, y)
+    return model.predict(df[features].tail(1))[0]
 
-# Usage
-# df = get_ml_data("BTCUSDT")
-# signal = train_and_predict(df)
-# if signal == 1: print("ML Signal: BUY")
+def generate_report():
+    global REPORT
+    results = []
+    for coin in COINS:
+        df = get_ml_data(coin)
+        signal = train_and_signal(df)
+        status = "🟢 BUY" if signal == 1 else "🔴 WAIT/SELL"
+        results.append(f"<tr><td>{coin}</td><td>{status}</td></tr>")
+    
+    REPORT = f"<h1>🤖 ML Scalping Signals</h1><table border='1'><tr><th>Coin</th><th>Signal</th></tr>{''.join(results)}</table>"
+
+@app.route('/')
+def home(): return REPORT
+
+if __name__ == "__main__":
+    threading.Thread(target=generate_report, daemon=True).start()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    
